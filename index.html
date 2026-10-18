@@ -1,0 +1,279 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>Living Perron Tree — Production Floor</title>
+    <style>
+        body {
+            margin: 0;
+            background: #111;
+            color: #eee;
+            font-family: system-ui, sans-serif;
+            display: flex;
+            height: 100vh;
+            overflow: hidden;
+        }
+        #canvas {
+            background: #1a1a1a;
+            border-right: 1px solid #333;
+            flex: 1;
+            cursor: grab;
+        }
+        #panel {
+            width: 340px;
+            padding: 16px;
+            overflow-y: auto;
+            background: #181818;
+            box-sizing: border-box;
+        }
+        h1 {
+            font-size: 1.2rem;
+            margin: 0 0 8px;
+        }
+        .stat {
+            margin: 6px 0;
+            font-size: 0.95rem;
+        }
+        .bar {
+            height: 10px;
+            background: #333;
+            border-radius: 4px;
+            overflow: hidden;
+            margin-top: 2px;
+        }
+        .fill {
+            height: 100%;
+            transition: width 0.2s;
+        }
+        button {
+            background: #2a2a2a;
+            color: #eee;
+            border: 1px solid #555;
+            padding: 8px 12px;
+            margin: 4px 4px 4px 0;
+            border-radius: 4px;
+            cursor: pointer;
+        }
+        button:hover {
+            background: #3a3a3a;
+        }
+        .anomaly {
+            color: #f55;
+            font-weight: bold;
+        }
+        .good {
+            color: #5f5;
+        }
+        .note {
+            font-size: 0.85rem;
+            color: #aaa;
+            margin-top: 12px;
+            line-height: 1.4;
+        }
+    </style>
+</head>
+<body>
+
+    <canvas id="canvas"></canvas>
+
+    <div id="panel">
+        <h1>Living Perron Tree</h1>
+        
+        <div class="stat">Scrap area: <span id="scrap">100</span>%</div>
+        <div class="bar"><div class="fill" id="scrapBar" style="width:100%; background:#f55;"></div></div>
+        
+        <div class="stat">Options preserved: <span id="options">3/3</span></div>
+        <div class="bar"><div class="fill" id="optBar" style="width:100%; background:#5f5;"></div></div>
+        
+        <div class="stat">Volume multiplier: <span id="vol">1.0</span>× <span id="anomaly"></span></div>
+        
+        <div style="margin: 12px 0;">
+            <button onclick="addStage()">Add Stage</button>
+            <button onclick="highVolume()">High Volume</button>
+            <button onclick="reset()">Reset</button>
+            <button onclick="freeze()">Freeze Gain</button>
+        </div>
+        
+        <div class="note" id="dual">Dual: What must be deleted so the problem almost disappears? Slide stations to increase controlled overlap while protecting the long edges (product options).</div>
+        <div class="note" id="status">Drag stations left/right. Overlap reduces scrap. Protect the outer edges.</div>
+    </div>
+
+    <script>
+        const canvas = document.getElementById('canvas');
+        const ctx = canvas.getContext('2d');
+        let W, H;
+
+        let stations = [];
+        let stage = 1;
+        let volume = 1;
+        let frozen = false;
+        let dragging = null;
+        let offsetX = 0;
+
+        function resize() {
+            W = canvas.width = canvas.clientWidth;
+            H = canvas.height = canvas.clientHeight;
+            if (stations.length === 0) {
+                init();
+            }
+        }
+
+        function makeStation(x, y, size, label, options) {
+            return { x, y, size, label, options: options.slice(), baseX: x, id: Math.random() };
+        }
+
+        function init() {
+            stations = [
+                makeStation(W * 0.5, H * 0.25, 120, "Form", ["A", "B"]),
+                makeStation(W * 0.5, H * 0.48, 100, "Weld", ["A", "C"]),
+                makeStation(W * 0.5, H * 0.70, 80, "Test", ["B", "C"])
+            ];
+            stage = 1;
+            volume = 1;
+            frozen = false;
+            document.getElementById('dual').textContent = "Dual: What must be deleted so the problem almost disappears? Slide stations to increase controlled overlap while protecting the long edges (product options).";
+            updateUI();
+        }
+
+        function drawTriangle(s) {
+            const h = s.size * 0.866;
+            ctx.beginPath();
+            ctx.moveTo(s.x, s.y - h / 2);
+            ctx.lineTo(s.x - s.size / 2, s.y + h / 2);
+            ctx.lineTo(s.x + s.size / 2, s.y + h / 2);
+            ctx.closePath();
+            
+            ctx.strokeStyle = s.options.length ? "#5af" : "#f55";
+            ctx.lineWidth = 2;
+            ctx.stroke();
+            
+            ctx.fillStyle = "rgba(90,170,255,0.08)";
+            ctx.fill();
+            
+            ctx.fillStyle = "#eee";
+            ctx.font = "12px system-ui";
+            ctx.textAlign = "center";
+            ctx.fillText(s.label, s.x, s.y + 4);
+            
+            ctx.font = "10px system-ui";
+            ctx.fillText(s.options.join(" "), s.x, s.y + h / 2 - 8);
+        }
+
+        function computeScrap() {
+            let total = 0;
+            for (let i = 0; i < stations.length; i++) {
+                for (let j = i + 1; j < stations.length; j++) {
+                    const dx = Math.abs(stations[i].x - stations[j].x);
+                    const overlap = Math.max(0, 1 - dx / 180);
+                    total += overlap;
+                }
+            }
+            const base = 100 - total * 12 * stage;
+            return Math.max(8, base / volume);
+        }
+
+        function optionsPreserved() {
+            let count = 0;
+            stations.forEach(s => count += s.options.length);
+            return count;
+        }
+
+        function updateUI() {
+            if (stations.length === 0) return;
+            
+            const scrap = computeScrap();
+            document.getElementById('scrap').textContent = scrap.toFixed(1);
+            document.getElementById('scrapBar').style.width = Math.min(100, Math.max(0, scrap)) + "%";
+            
+            const opts = optionsPreserved();
+            const maxOpts = stations.length * 2;
+            document.getElementById('options').textContent = opts + "/" + maxOpts;
+            document.getElementById('optBar').style.width = (opts / maxOpts * 100) + "%";
+            
+            document.getElementById('vol').textContent = volume.toFixed(1);
+            
+            const anom = volume > 2 && scrap > 25 ? "ANOMALY: limiting factor still binding" : "";
+            document.getElementById('anomaly').textContent = anom;
+            document.getElementById('anomaly').className = anom ? "anomaly" : "";
+            
+            document.getElementById('status').textContent = frozen ? "Gain frozen. Next residual appears on next stage." : "Drag to overlap. Protect long edges.";
+        }
+
+        function draw() {
+            ctx.clearRect(0, 0, W, H);
+            ctx.fillStyle = "#111";
+            ctx.fillRect(0, 0, W, H);
+
+            // Floor lines
+            ctx.strokeStyle = "#222";
+            for (let y = 40; y < H; y += 40) {
+                ctx.beginPath();
+                ctx.moveTo(0, y);
+                ctx.lineTo(W, y);
+                ctx.stroke();
+            }
+
+            stations.forEach(drawTriangle);
+            requestAnimationFrame(draw);
+        }
+
+        canvas.addEventListener('mousedown', e => {
+            const rect = canvas.getBoundingClientRect();
+            const mx = e.clientX - rect.left;
+            const my = e.clientY - rect.top;
+            
+            for (let s of stations) {
+                if (Math.hypot(mx - s.x, my - s.y) < s.size * 0.6) {
+                    dragging = s;
+                    offsetX = mx - s.x;
+                    canvas.style.cursor = "grabbing";
+                    return;
+                }
+            }
+        });
+
+        canvas.addEventListener('mousemove', e => {
+            if (!dragging) return;
+            const rect = canvas.getBoundingClientRect();
+            dragging.x = e.clientX - rect.left - offsetX;
+            dragging.x = Math.max(80, Math.min(W - 80, dragging.x));
+            updateUI();
+        });
+
+        window.addEventListener('mouseup', () => {
+            if (dragging) {
+                dragging = null;
+                canvas.style.cursor = "grab";
+            }
+        });
+
+        window.addEventListener('resize', resize);
+        
+        function addStage() {
+            stage++;
+            stations.forEach(s => s.size *= 0.92);
+            stations.push(makeStation(W * 0.5, H * 0.85 - stage * 10, 70 - stage * 4, "Opt " + stage, ["A", "B", "C"].slice(0, 2)));
+            updateUI();
+        }
+
+        function highVolume() {
+            volume = Math.min(5, volume + 0.8);
+            updateUI();
+        }
+
+        function reset() {
+            init();
+        }
+
+        function freeze() {
+            frozen = true;
+            updateUI();
+            document.getElementById('dual').textContent = "Gain frozen. Residual uncertainty moved. Next stage ready.";
+        }
+
+        // Execution bootstrap
+        resize();
+        requestAnimationFrame(draw);
+    </script>
+</body>
+</html>
